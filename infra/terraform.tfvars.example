@@ -1,0 +1,5 @@
+project_id = "swarm-gcp-yourname"
+region     = "us-central1"
+image      = "us-central1-docker.pkg.dev/swarm-gcp-yourname/swarm/worker:v1"
+queries    = "ai agents,agentic workflows,llm evals"
+schedule   = "0 */2 * * *"

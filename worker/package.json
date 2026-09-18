@@ -1,0 +1,16 @@
+{
+  "name": "swarm-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.js",
+    "local": "RUN_MODE=local node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^7.9.1",
+    "@google-cloud/pubsub": "^4.9.0"
+  }
+}
