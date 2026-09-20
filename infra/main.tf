@@ -17,6 +17,13 @@ locals {
   ]
 }
 
+# Needed to build the Pub/Sub service agent's email below. This is not
+# related to the project you run Terraform as; it is the identity Google
+# manages on your behalf for the Pub/Sub service itself.
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
 # An API you have not enabled is the most common first error on a new project.
 resource "google_project_service" "enabled" {
   for_each                   = toset(local.services)
@@ -151,6 +158,25 @@ resource "google_pubsub_subscription" "qualified_pull" {
     minimum_backoff = "10s"
     maximum_backoff = "600s"
   }
+}
+
+# dead_letter_policy above is otherwise inert. Pub/Sub moves a message to the
+# dead-letter topic by having its own service agent publish to that topic and
+# pull (to ack) from the source subscription on your behalf. Neither
+# permission exists by default, so without these two bindings a message that
+# exhausts max_delivery_attempts just keeps failing past the limit instead of
+# ever reaching qualified-leads-dead-letter -- a common and silent Terraform
+# gotcha.
+resource "google_pubsub_topic_iam_member" "pubsub_sa_publishes_dead_letter" {
+  topic  = google_pubsub_topic.dead_letter.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+resource "google_pubsub_subscription_iam_member" "pubsub_sa_subscribes_source" {
+  subscription = google_pubsub_subscription.qualified_pull.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
 resource "google_pubsub_topic_iam_member" "job_publishes" {

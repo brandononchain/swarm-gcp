@@ -1,0 +1,68 @@
+name: Deploy
+
+# Builds the worker image and applies Terraform on every push to main.
+# Authenticates to Google Cloud with Workload Identity Federation, so no
+# service account key is ever stored in this repo or its secrets.
+#
+# One-time setup (see LEARN.md step 8b):
+#   - Create a Workload Identity Pool + Provider trusting this repo, and a
+#     deploy service account it can impersonate (roles/editor is overkill;
+#     scope it to the roles infra/main.tf actually needs).
+#   - Set repo variables: GCP_PROJECT_ID, GCP_REGION, TF_STATE_BUCKET.
+#   - Set repo secrets: GCP_WIF_PROVIDER, GCP_DEPLOY_SA.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'worker/**'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # required for Workload Identity Federation
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # never cancel a terraform apply mid-flight
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          IMAGE="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/swarm/worker:${{ github.sha }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          gcloud builds submit worker --project "${{ vars.GCP_PROJECT_ID }}" --tag "$IMAGE"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=swarm"
+
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform apply -auto-approve \
+            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="region=${{ vars.GCP_REGION }}" \
+            -var="image=${{ env.IMAGE }}"

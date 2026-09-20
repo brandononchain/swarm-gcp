@@ -61,10 +61,13 @@ runs as the `node` user rather than root.
 
 ---
 
-## 4. Read the Terraform before you apply it
+## 4. Point Terraform at remote state, then read it before you apply
 
 ```bash
-cd infra && terraform init && terraform plan \
+make bootstrap                                 # one-time: creates the state bucket
+cp infra/backend.hcl.example infra/backend.hcl # set bucket to the output above
+make init                                      # terraform init -backend-config=backend.hcl
+cd infra && terraform plan \
   -var="project_id=$(gcloud config get-value project)" \
   -var="image=us-central1-docker.pkg.dev/$(gcloud config get-value project)/swarm/worker:v1"
 ```
@@ -94,8 +97,8 @@ the structured JSON the worker prints. Cloud Logging indexes those fields, so
 parse.
 
 **Question:** the job sets `max_retries = 1`. What happens to the BigQuery rows
-if the run fails halfway and retries, and which line in `worker/src/sinks.js`
-makes that safe?
+if the run fails halfway and retries, and why does `worker/src/sinks.js` call
+that "best-effort" safe rather than fully safe?
 
 ---
 
@@ -129,7 +132,10 @@ gcloud pubsub subscriptions describe qualified-leads-pull
 Pull the messages and note that they come back again if you do not acknowledge
 them. That is the point: Pub/Sub holds a message until something confirms it
 handled it, retries with backoff, and after five failures moves it to the dead
-letter topic instead of retrying forever.
+letter topic instead of retrying forever -- which only works because
+`infra/main.tf` also grants the Pub/Sub service agent publisher on the
+dead-letter topic and subscriber on this subscription. Skip either binding and
+the dead-letter policy silently does nothing.
 
 **Question:** the worker publishes with an ordering key of `source`. What does
 that guarantee, and what does it deliberately not guarantee?
@@ -144,11 +150,29 @@ exists.
 
 ```bash
 make destroy                                   # removes everything Terraform made
+cd infra/bootstrap && terraform destroy -var="project_id=$(gcloud config get-value project)" # removes the state bucket
 gcloud projects delete $(gcloud config get-value project)   # removes the rest
 ```
 
 **Question:** `terraform destroy` leaves a few things behind. Which ones, and
 why does deleting the project matter more than the destroy?
+
+### 8b. Deploy from CI instead of by hand
+
+`.github/workflows/deploy.yml` builds the image and runs `terraform apply` on
+every push to `main`, authenticating with Workload Identity Federation so no
+service account key is ever stored in GitHub. To turn it on:
+
+1. Create a Workload Identity Pool + Provider trusting `repo:brandononchain/swarm-gcp`.
+2. Create a deploy service account, grant it just the roles `infra/main.tf`
+   needs (project IAM admin over the resources it manages, not `roles/owner`),
+   and let the pool impersonate it.
+3. Set repo variables `GCP_PROJECT_ID`, `GCP_REGION`, `TF_STATE_BUCKET` and
+   secrets `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`.
+
+**Question:** why does `permissions: id-token: write` replace a downloaded
+service account key, and what would an attacker gain from stealing this
+workflow's credentials versus a long-lived key?
 
 ---
 
@@ -160,10 +184,13 @@ why does deleting the project matter more than the destroy?
 2. **Add a subscriber.** A second Cloud Run job, or a Cloud Function, that pulls
    from `qualified-leads` and drafts the opening line. That is where a model
    belongs: after the scoring, never inside it.
-3. **Move the state.** Put the Terraform state in a GCS bucket with versioning,
-   so this stops being a laptop-only setup.
-4. **Deploy from CI.** Add Workload Identity Federation so GitHub Actions can
-   build and apply with no service account key stored anywhere.
+3. **Tighten the CD service account.** Step 8b ships CI/CD wired up; the next
+   move is scoping the deploy service account down to exactly the roles
+   `infra/main.tf` grants, instead of anything broader used to get it working.
+4. **Make BigQuery writes exactly-once.** insertId dedup is best-effort (see
+   `worker/src/sinks.js`). If a downstream consumer can't tolerate duplicates,
+   land rows in a staging table and `MERGE` into `signals` on `external_id`
+   instead of streaming inserts directly.
 
 Each of those is a paragraph you can defend in an interview, which is worth
 more than the certification you could buy with the same three hours.

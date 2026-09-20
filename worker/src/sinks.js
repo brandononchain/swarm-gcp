@@ -3,9 +3,14 @@
  * the whole pipeline with no Google account and no spend. `gcp` writes rows to
  * BigQuery and publishes the ones above the threshold to Pub/Sub.
  *
- * Insert ids make the BigQuery write idempotent: rerunning the job over the
- * same window does not duplicate rows, which matters because Cloud Run jobs
- * retry on failure and a retry is a rerun.
+ * Insert ids make the BigQuery write idempotent on a best-effort basis, not a
+ * guaranteed one: streaming inserts dedupe by insertId only within a short,
+ * undocumented window (historically on the order of a minute). A retry that
+ * lands inside that window is deduped for free; a retry that lands outside
+ * it can still produce a duplicate row for the same external_id. That's an
+ * acceptable risk at this workload's volume, but it is not a correctness
+ * guarantee -- a downstream consumer that cannot tolerate duplicates should
+ * dedupe on external_id itself (e.g. with a MERGE or a dedup view).
  */
 
 import fs from 'node:fs/promises';
@@ -42,8 +47,9 @@ export async function gcpSink({ projectId, dataset, table, topic }) {
       await bq
         .dataset(dataset)
         .table(table)
-        // insertId is what makes a retried job safe: BigQuery drops a row it
-        // has already seen with the same id inside its dedup window.
+        // insertId dedupes a retry that lands within BigQuery's short,
+        // undocumented streaming dedup window. It reduces duplicates, it does
+        // not eliminate them -- see the file header comment.
         .insert(rows.map((r) => ({ insertId: r.external_id, json: r })), { raw: true });
       return { written: rows.length };
     },

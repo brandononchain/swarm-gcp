@@ -36,11 +36,25 @@ create it. Short version:
 ```bash
 gcloud projects create swarm-gcp-yourname
 gcloud config set project swarm-gcp-yourname
+
+make bootstrap                                 # one-time: GCS bucket for Terraform state
+cp infra/backend.hcl.example infra/backend.hcl # set bucket to the output above
+make init                                      # point Terraform at that bucket
+
 make build          # Cloud Build pushes the image to Artifact Registry
 make apply          # Terraform creates everything else
 make run            # one execution now instead of waiting for the schedule
 make query          # top scoring signals, straight out of BigQuery
 ```
+
+## Deploying from CI
+
+`.github/workflows/deploy.yml` builds the image and applies Terraform on every
+push to `main`, authenticating to Google Cloud with Workload Identity
+Federation -- no service account key is stored anywhere. It needs a Workload
+Identity Pool/Provider, a deploy service account, and the repo
+variables/secrets described at the top of that workflow file before it will
+succeed; until then it's there to read, not to run.
 
 ## What it costs
 
@@ -65,9 +79,18 @@ trust.
 - **Scoring is code, not a prompt.** `worker/src/score.js` is deterministic and
   tested, and every score carries the reasons behind it. A model can write the
   opening line later; it does not get to decide what is worth your attention.
-- **Idempotent writes.** BigQuery rows carry an `insertId`, so a retried run
-  converges instead of duplicating leads.
+- **Best-effort idempotent writes.** BigQuery rows carry an `insertId`, so a
+  retry that lands within BigQuery's short, undocumented streaming-dedup
+  window converges instead of duplicating a row. A retry outside that window
+  can still duplicate one -- see the comment in `worker/src/sinks.js` before
+  you call this a guarantee.
+- **Dead letters actually work.** The dead-letter topic isn't just declared;
+  `infra/main.tf` also grants the Pub/Sub service agent the publish/subscribe
+  roles it needs to actually move a failed message there.
 - **Least privilege, twice.** The job can write one table and publish to one
   topic. The scheduler can start one job. Neither can do the other's work.
 - **One dead source does not fail the run.** It is recorded in the structured
   log and the run continues. Every source failing is a real failure and exits 1.
+- **Remote, versioned state.** `infra/bootstrap` creates the GCS bucket that
+  holds Terraform state, so this isn't a laptop-only setup a wiped machine or
+  a concurrent apply can silently corrupt.

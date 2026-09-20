@@ -15,6 +15,12 @@ local:           ## one full pass with no Google account, writes worker/out/
 build:           ## build and push the worker image to Artifact Registry
 	gcloud builds submit worker --tag $(IMAGE)
 
+bootstrap:       ## one-time: create the GCS bucket that holds Terraform state
+	cd infra/bootstrap && terraform init && terraform apply -var="project_id=$(PROJECT)" -var="region=$(REGION)"
+
+init:            ## point Terraform at the remote state bucket (needs infra/backend.hcl, see backend.hcl.example)
+	cd infra && terraform init -backend-config=backend.hcl
+
 plan:            ## what Terraform would change
 	cd infra && terraform plan -var="project_id=$(PROJECT)" -var="image=$(IMAGE)"
 
@@ -39,4 +45,4 @@ cost:            ## this month so far, by service
 destroy:         ## remove everything this created
 	cd infra && terraform destroy -var="project_id=$(PROJECT)" -var="image=$(IMAGE)"
 
-.PHONY: test local build plan apply run logs query pull cost destroy
+.PHONY: test local build bootstrap init plan apply run logs query pull cost destroy
