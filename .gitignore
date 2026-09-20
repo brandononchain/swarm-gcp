@@ -1,1 +1,8 @@
-bm9kZV9tb2R1bGVzLwpvdXQvCi50ZXJyYWZvcm0vCiotdGZzdGF0ZQoqLnRmc3RhdGUuKgp0ZXJyYWZvcm0udGZ2YXJzCmluZnJhL2JhY2tlbmQuaGNsCi5lbnYK
+node_modules/
+out/
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+infra/backend.hcl
+.env
